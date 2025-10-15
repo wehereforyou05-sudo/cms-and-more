@@ -1,0 +1,2 @@
+"C:\Users\Pappii\Documents\aurion-rebuild\src\cms"
+"C:\Users\Pappii\Documents\aurion-rebuild\public\images"
