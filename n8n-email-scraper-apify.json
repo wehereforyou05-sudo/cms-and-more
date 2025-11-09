@@ -1,0 +1,191 @@
+{
+  "name": "Email Scraper with Apify",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "/webhook/email-scraper",
+        "responseMode": "onReceived",
+        "responseData": "{\n  \"status\": \"Scraping started\",\n  \"url\": \"{{ $json.url }}\"\n}"
+      },
+      "id": "webhook_trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        250
+      ],
+      "webhookId": "email-scraper"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "actor": "apify/web-scraper",
+        "input": {
+          "startUrls": [
+            {
+              "url": "={{ $json.url }}"
+            }
+          ],
+          "globs": [
+            {
+              "glob": "{{ $json.glob || '*' }}"
+            }
+          ],
+          "pseudoUrls": [],
+          "linkSelector": "a[href]",
+          "pageFunction": "async function pageFunction(context) {\n  const $ = context.jQuery;\n  const pageData = {\n    url: context.request.url,\n    title: $('title').text(),\n    text: $('body').text(),\n    emails: [],\n    links: []\n  };\n\n  // Extract emails using regex\n  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;\n  const allText = $('body').html();\n  const emails = allText.match(emailRegex) || [];\n  pageData.emails = [...new Set(emails)]; // Remove duplicates\n\n  // Extract all links\n  $('a[href]').each(function() {\n    const href = $(this).attr('href');\n    if (href && !href.startsWith('javascript:')) {\n      pageData.links.push({\n        url: href,\n        text: $(this).text().trim()\n      });\n    }\n  });\n\n  // Extract structured data\n  pageData.headings = [];\n  $('h1, h2, h3').each(function() {\n    pageData.headings.push($(this).text().trim());\n  });\n\n  return pageData;\n}",
+          "proxyConfiguration": {
+            "useApifyProxy": false
+          },
+          "maxPagesPerCrawl": "{{ $json.maxPages || 10 }}"
+        }
+      },
+      "id": "apify_web_scraper",
+      "name": "Apify Web Scraper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        450,
+        250
+      ],
+      "credentials": {
+        "httpBasicAuth": "apify_api"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "url": "=https://api.apify.com/v2/actor-runs/{{ $json.id }}/dataset/items",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "apifyApi"
+      },
+      "id": "get_apify_results",
+      "name": "Get Apify Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        650,
+        250
+      ],
+      "credentials": {
+        "apifyApi": "apify_credentials"
+      }
+    },
+    {
+      "parameters": {
+        "expression": "={\n  \"totalEmails\": $json.length,\n  \"uniqueEmails\": Object.keys(\n    $json.reduce((acc, item) => {\n      if (item.emails && Array.isArray(item.emails)) {\n        item.emails.forEach(email => {\n          if (email && !acc[email]) {\n            acc[email] = true;\n          }\n        });\n      }\n      return acc;\n    }, {})\n  ),\n  \"pages\": $json.map(item => ({\n    url: item.url,\n    title: item.title,\n    emailsFound: item.emails ? item.emails.length : 0,\n    emails: item.emails || []\n  }))\n}",
+        "options": {}
+      },
+      "id": "process_emails",
+      "name": "Process Emails",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        850,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.webhookUrl }}",
+        "sendBody": true,
+        "bodyParametersUi": "json",
+        "bodyParameters": "{\n  \"timestamp\": \"{{ $now.toIso() }}\",\n  \"scrapedUrl\": \"{{ $node.Webhook.json.url }}\",\n  \"totalPagesScraped\": \"{{ $json.pages.length }}\",\n  \"uniqueEmailsFound\": \"{{ $json.uniqueEmails.length }}\",\n  \"emails\": \"{{ $json.uniqueEmails }}\",\n  \"pageDetails\": \"{{ $json.pages }}\"\n}"
+      },
+      "id": "send_results",
+      "name": "Send Results Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1050,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "return [\n  {\n    json: {\n      timestamp: new Date().toISOString(),\n      status: 'completed',\n      totalUniqueEmails: $json.uniqueEmails.length,\n      emails: $json.uniqueEmails,\n      pagesSummary: $json.pages\n    }\n  }\n];"
+      },
+      "id": "final_output",
+      "name": "Final Output",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        250
+      ]
+    }
+  ],
+  "connections": {
+    "webhook_trigger": {
+      "main": [
+        [
+          {
+            "node": "apify_web_scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "apify_web_scraper": {
+      "main": [
+        [
+          {
+            "node": "get_apify_results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_apify_results": {
+      "main": [
+        [
+          {
+            "node": "process_emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process_emails": {
+      "main": [
+        [
+          {
+            "node": "send_results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "final_output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_results": {
+      "main": [
+        [
+          {
+            "node": "final_output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "8fccccc3-efab-41ea-8c30-b1c1c8b87fbe",
+  "meta": {
+    "instanceId": "8fccccc3-efab-41ea-8c30-b1c1c8b87fbe"
+  },
+  "pinData": {}
+}
